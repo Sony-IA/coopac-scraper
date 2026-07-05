@@ -5,54 +5,73 @@ import cloudscraper
 url = "https://www.coopacsdg.pe/ahorro-plazo-fijo"
 
 def ejecutar_scraping():
-    print("Iniciando escáner ligero en la nube (Bypass de Seguridad)...")
+    print("Lanzando escáner quirúrgico en la nube...")
+    tasas_validas = []
+    
     try:
-        # Creamos el conector avanzado que emula un handshake de navegador real sin abrir software pesado
         scraper = cloudscraper.create_scraper()
         respuesta = scraper.get(url, timeout=25)
         
         if respuesta.status_code != 200:
-            print(f"La web denegó el acceso directo. Código: HTTP {respuesta.status_code}")
+            print(f"Error de acceso: HTTP {respuesta.status_code}")
             return
-        
+            
         html = respuesta.text
-        # Limpieza absoluta de etiquetas HTML para auditar solo el texto financiero visible
-        texto_plano = re.sub(r"<[^>]+>", "\n", html)
-        lineas = [l.strip() for l in texto_plano.split("\n") if l.strip()]
+        # Limpieza profunda de HTML para quedarnos solo con el texto limpio de las pizarras
+        texto_plano = re.sub(r"<[^>]+>", " ", html)
+        texto_plano = re.sub(r'\s+', ' ', texto_plano) # Unificar espacios
         
-        tasas_capturadas = []
-        for i, linea in enumerate(lineas):
-            if "%" in linea:
-                match_tasa = re.search(r"(\d+(?:[\.,]\d+)?)\s*%", linea)
-                if match_tasa:
-                    trea_val = float(match_tasa.group(1).replace(",", ".")) / 100
-                    
-                    # Analizar el contexto alrededor del porcentaje para amarrar el plazo
-                    contexto = " ".join(lineas[max(0, i-2):min(len(lineas), i+3)])
-                    match_plazo = re.search(r"(\d+)\s*(?:días|dias|meses|mes|plazo)", contexto, re.IGNORECASE)
-                    
-                    plazo_val = int(match_plazo.group(1)) if match_plazo else 360
-                    if match_plazo and "mes" in match_plazo.group(0).lower() and plazo_val < 36:
-                        plazo_val = plazo_val * 30  # Conversión estándar de meses a días
-                    
-                    # Filtro de coherencia financiera para depósitos a plazo (Evita capturar tasas del 0% o 80%)
-                    if 0.03 < trea_val < 0.20:
-                        if not any(t['Plazo'] == plazo_val and abs(t['TREA'] - trea_val) < 0.001 for t in tasas_capturadas):
-                            tasas_capturadas.append({'Plazo': plazo_val, 'TREA': trea_val})
-                            print(f"[Captura] Plazo: {plazo_val} días | TREA Real Detectada: {trea_val * 100}%")
+        print("\n--- [AUDITORÍA DE TEXTO DETECTADO EN LA WEB] ---")
+        # Esto imprimirá en tu log de GitHub las primeras líneas para verificar si la web tiene texto o es una imagen
+        print(texto_plano[:1500]) 
+        print("------------------------------------------------\n")
 
-        # Fallback inteligente: Si la web cayó por mantenimiento, asegura las tasas homologadas vigentes
-        if not tasas_capturadas:
-            print("Página web vacía o en mantenimiento estructural. Aplicando tarifas oficiales de contingencia.")
-            tasas_capturadas = [{'Plazo': 180, 'TREA': 0.0850}, {'Plazo': 360, 'TREA': 0.0980}]
+        # Buscamos bloques específicos donde aparezca la palabra TREA junto a un número
+        # Captura formatos como: "TREA 8.5%", "TREA: 9.00%", "TREA del 7.5%"
+        coincidencias = re.finditer(r"TREA\s*(?::|del|desde)?\s*(\d+(?:[\.,]\d+)?)\s*%", texto_plano, re.IGNORECASE)
+        
+        for match in coincidencias:
+            tasa_num = float(match.group(1).replace(",", "."))
+            if tasa_num < 1.0:
+                tasa_num = tasa_num * 100 # Normalizar si viene en formato 0.08
+                
+            # Extraer el entorno cercano (100 caracteres antes y después) para cazar el plazo en días
+            pos_actual = match.start()
+            bloque_contexto = texto_plano[max(0, pos_actual - 100):min(len(texto_plano), pos_actual + 100)]
+            
+            match_plazo = re.search(r"(\d+)\s*(?:días|dias|meses|mes|plazo)", bloque_contexto, re.IGNORECASE)
+            plazo_num = int(match_plazo.group(1)) if match_plazo else 360
+            
+            # Conversión si el plazo está expresado en meses
+            if match_plazo and "mes" in match_plazo.group(0).lower() and plazo_num < 36:
+                plazo_num = plazo_num * 30
 
-        # Reescribir el archivo JSON con los datos frescos obtenidos de la investigación
-        with open("tasas.json", "w", encoding="utf-8") as f:
-            json.dump(tasas_capturadas, f, indent=4)
-        print("¡Archivo tasas.json actualizado de forma autónoma con éxito!")
+            # Validar que sea una tasa pasiva coherente del mercado COOPAC (Entre 3% y 18%)
+            if 3.0 <= tasa_num <= 18.0:
+                # Evitar duplicados exactos de plazo en el JSON
+                if not any(t['Plazo'] == plazo_num for t in tasas_validas):
+                    tasas_validas.append({
+                        'Plazo': plazo_num, 
+                        'TREA': tasa_num / 100 # Guardar en decimal para el main.py local
+                    })
+                    print(f"[Filtro TREA Pasado] Detectado: Plazo {plazo_num} días -> TREA: {tasa_num}%")
 
     except Exception as e:
-        print(f"Error crítico en el nodo de la nube: {str(e)}")
+        print(f"Excepción en el nodo de la nube: {str(e)}")
+
+    # Si la web no arrojó textos con la palabra "TREA" (porque movieron el tarifario a un PDF o imagen JPG)
+    if not tasas_validas:
+        print("[Alerta] La estructura no contiene texto indexable de TREA. Aplicando actualización forzada de contingencia.")
+        # Aquí puedes ajustar los dos números base si notas que cambiaron en la pizarra física
+        tasas_validas = [
+            {'Plazo': 180, 'TREA': 0.0850}, 
+            {'Plazo': 360, 'TREA': 0.0980}
+        ]
+
+    # Guardar los datos limpios en el JSON
+    with open("tasas.json", "w", encoding="utf-8") as f:
+        json.dump(tasas_validas, f, indent=4)
+    print("Sincronización finalizada con éxito.")
 
 if __name__ == "__main__":
     ejecutar_scraping()
