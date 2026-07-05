@@ -1,0 +1,32 @@
+name: COOPAC Online Scraper
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Se ejecuta automáticamente todas las noches
+  workflow_dispatch: # Te permite ejecutarlo manualmente haciendo un clic desde la web de GitHub
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v3
+
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Instalar dependencias
+        run: pip install requests
+
+      - name: Ejecutar Extractor Comercial
+        run: python scrape_cloud.py
+
+      - name: Guardar y Publicar Datos en la Red
+        run: |
+          git config --global user.name "Cloud Robot"
+          git config --global user.email "robot@github.com"
+          git add tasas.json
+          git commit -m "Actualización automática de tasas reales" || exit 0
+          git push
